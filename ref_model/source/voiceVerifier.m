@@ -15,7 +15,7 @@ classdef voiceVerifier < handle
     %       params     — структура с полями:
     %                     frame_len_s  (по умолч. 0.025)
     %                     hop_size_s   (по умолч. 0.010)
-    %                     n_fft        (по умолч. 512)
+    %                     nfft         (по умолч. 512)
     %                     n_filters    (по умолч. 20)
     %                     n_coeffs     (по умолч. 13)
     %                     pre_emph     (по умолч. 0.97)
@@ -45,7 +45,7 @@ classdef voiceVerifier < handle
             % --- Параметры по умолчанию --------------------------------
             default_params.frame_len_s = 0.025;  % Длина окна, с
             default_params.hop_size_s  = 0.010;  % Шаг кадра, с
-            default_params.n_fft       = 512;    % Размер FFT
+            default_params.nfft       = 512;    % Размер FFT
             default_params.n_filters   = 20;     % Количество Мел-фильтров
             default_params.n_coeffs    = 13;     % Количество MFCC-коэффициентов
             default_params.pre_emph    = 0.97;   % Коэффициент пре-акцента
@@ -117,7 +117,7 @@ classdef voiceVerifier < handle
             h_window = 0.54 - 0.46 * cos(2 * pi * (0:frame_len-1)' / (frame_len-1));
 
             % 4. Набор фильтров
-            mel_bank = obj.createMelBank(p.n_filters, p.n_fft, fs);
+            mel_bank = obj.createMelBank(p.n_filters, p.nfft, fs);
 
             % 5. Цикл по кадрам
             for i = 1:num_frames
@@ -126,8 +126,8 @@ classdef voiceVerifier < handle
 
                 % Оконная функция + FFT + спектр мощности
                 windowed_frame = frame .* h_window;
-                spec       = abs(fft(windowed_frame, p.n_fft));
-                power_spec = (1/p.n_fft) * (spec(1:p.n_fft/2+1).^2);
+                spec       = abs(fft(windowed_frame, p.nfft));
+                power_spec = (1/p.nfft) * (spec(1:p.nfft/2+1).^2);
                 if size(power_spec, 1) == 1
                     power_spec = power_spec(:);  % Принудительно столбец
                 end
@@ -140,7 +140,7 @@ classdef voiceVerifier < handle
         end
 
         % --------------------------------------------------------------- %
-        function bank = createMelBank(~, n_filters, n_fft, fs)
+        function bank = createMelBank(~, n_filters, nfft, fs)
             % createMelBank  Формирование треугольного Мел-фильтрового банка.
 
             f_min = 0;
@@ -151,8 +151,8 @@ classdef voiceVerifier < handle
             m_pts = linspace(m_min, m_max, n_filters + 2);
             f_pts = 700 * (exp(m_pts / 1127) - 1);
 
-            bins = floor((n_fft + 1) * f_pts / fs);
-            bank = zeros(n_filters, n_fft/2 + 1);
+            bins = floor((nfft + 1) * f_pts / fs);
+            bank = zeros(n_filters, nfft/2 + 1);
 
             for m = 2:n_filters+1
                 for k = bins(m-1):bins(m)

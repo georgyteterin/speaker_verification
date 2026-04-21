@@ -1,0 +1,22 @@
+{
+    "base1":{
+      "testname": "base",
+      "testset": "testset1",
+      "verifier":{
+          "method": "dtw",
+          "configure_params":{
+            "nfft": 512
+          }
+      }
+    },
+    "base2":{
+      "testname": "base",
+      "testset": "testset1",
+      "verifier":{
+          "method": "dtw",
+          "configure_params":{
+            "nfft": 512
+          }
+      }
+    }
+}
