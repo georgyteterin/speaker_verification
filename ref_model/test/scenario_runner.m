@@ -1,0 +1,41 @@
+function out = scenario_runner(config)
+
+    addpath ..\source\
+
+    testset_folder = "..\audio\" + config.testset;
+    ref_path = testset_folder + "\ref.wav";
+    auth_folder = testset_folder + "\actual\";
+    auth_files  = dir(fullfile(auth_folder, '*.wav'));
+    imposter_folder = testset_folder + "\imposters\";
+    
+    fprintf('Запуск сценария: %s\n', config.testcase);
+    
+    [ref_data, ref_fs] = audioread(ref_path);
+
+    vv = voiceVerifier();
+    vv.Configure(ref_data, ref_fs, config.verifier.configure_params);
+
+    scores_auth = zeros(1, numel(auth_files));  
+    
+    for k = 1:numel(auth_files)
+        [test_data, test_fs] = audioread(fullfile(auth_folder, auth_files(k).name));
+        scores_auth(k) = vv.Process(test_data, test_fs, config.verifier.method);  
+    end
+    
+    imposter_files  = dir(fullfile(imposter_folder, '*.wav'));
+    scores_imp = zeros(1, numel(imposter_files)); 
+    
+    for k = 1:numel(imposter_files)
+        [test_data, test_fs] = audioread(fullfile(imposter_folder, imposter_files(k).name));
+        scores_imp(k) = vv.Process(test_data, test_fs, config.verifier.method);  
+    end
+
+    out.testcase = config.testcase;
+    out.params.method = config.verifier.method;
+    out.res.auth_scores = scores_auth;
+    out.res.imposter_scores = scores_imp;
+
+    fprintf('Сценарий обработан: %s\n', config.testcase);
+    
+end
+
