@@ -33,6 +33,8 @@ classdef voiceVerifier < handle
     properties (SetAccess = private)
         Params          % Структура параметров MFCC
         RefFeatures     % MFCC эталонной записи  [num_frames × n_coeffs]
+        Threshold       % Порог верификации, вычисленный по калибровочным записям
+        CalibScores     % Scores по калибровочным записям (для анализа)
         isConfigured    % Флаг готовности
     end
 
@@ -41,17 +43,32 @@ classdef voiceVerifier < handle
     % ------------------------------------------------------------------ %
     methods (Access = public)
 
-        function Configure(obj, ref_data, ref_fs, params)
+        function Configure(obj, ref_data, ref_fs, calib_data, calib_fs, params)
+            % Configure  Инициализация верификатора.
+            %
+            % Обязательные аргументы:
+            %   ref_data   — вектор отсчётов референсной записи
+            %   ref_fs     — частота дискретизации референсной записи (Гц)
+            %   calib_data — cell-массив {N×1} калибровочных записей владельца
+            %   calib_fs   — частота дискретизации калибровочных записей (Гц)
+            %
+            % Необязательный аргумент:
+            %   params     — структура с полями (см. описание класса),
+            %                также может содержать поле threshold_k (по умолч. 2.0) —
+            %                коэффициент запаса при вычислении порога
+
             % --- Параметры по умолчанию --------------------------------
-            default_params.frame_len_s = 0.025;  % Длина окна, с
-            default_params.hop_size_s  = 0.010;  % Шаг кадра, с
-            default_params.nfft       = 512;    % Размер FFT
-            default_params.n_filters   = 20;     % Количество Мел-фильтров
-            default_params.n_coeffs    = 13;     % Количество MFCC-коэффициентов
-            default_params.pre_emph    = 0.97;   % Коэффициент пре-акцента
+            default_params.frame_len_s  = 0.025; % Длина окна, с
+            default_params.hop_size_s   = 0.010; % Шаг кадра, с
+            default_params.nfft         = 512;   % Размер FFT
+            default_params.n_filters    = 20;    % Количество Мел-фильтров
+            default_params.n_coeffs     = 13;    % Количество MFCC-коэффициентов
+            default_params.pre_emph     = 0.97;  % Коэффициент пре-акцента
+            default_params.threshold_k  = 2.0;   % Параметр из формуры 
+                                                 % порога (mean + k*std)
 
             % --- Слияние с пользовательскими параметрами ---------------
-            if nargin < 4 || isempty(params)
+            if nargin < 6 || isempty(params)
                 obj.Params = default_params;
             else
                 obj.Params = obj.mergeParams(default_params, params);
@@ -60,12 +77,40 @@ classdef voiceVerifier < handle
             % --- Признаки референсной записи ---------------------------
             obj.RefFeatures = obj.extractSimpleMFCC(ref_data, ref_fs);
 
+            % --- Калибровка: вычисление scores на своих записях --------
+            if ~iscell(calib_data)
+                error('voiceVerifier:Configure', ...
+                    'calib_data должен быть cell-массивом векторов.');
+            end
+
+            n_calib = numel(calib_data);
+            obj.CalibScores = zeros(1, n_calib);
+            for k = 1:n_calib
+                calib_features = obj.extractSimpleMFCC(calib_data{k}, calib_fs);
+                obj.CalibScores(k) = obj.compareEuclidean(calib_features, obj.RefFeatures);
+            end
+
+            % --- Вычисление порога -------------------------------------
+            % порог = mean + k * std
+            obj.Threshold = mean(obj.CalibScores) + obj.Params.threshold_k * std(obj.CalibScores);
+
             obj.isConfigured = true;
+
+            fprintf('[voiceVerifier] Configured: %d calib records, threshold = %.4f\n', ...
+                n_calib, obj.Threshold);
         end
 
         % --------------------------------------------------------------- %
 
-        function score = Process(obj, test_data, test_fs, method)
+        function [score, decision] = Process(obj, test_data, test_fs, method)
+            % Process  Верификация тестовой записи.
+            %
+            % Возвращает:
+            %   score    — расстояние (меньше = похожее)
+            %   decision — true если score < Threshold (владелец), false если чужой
+            %
+            % Примечание: Threshold вычисляется по Euclidean в Configure.
+            % При использовании метода 'dtw' decision носит справочный характер.
 
             if ~obj.isConfigured
                 error('voiceVerifier:Process', ...
@@ -89,6 +134,9 @@ classdef voiceVerifier < handle
                     error('voiceVerifier:Process', ...
                         'Неизвестный метод ''%s''. Используйте ''euclidean'' или ''dtw''.', method);
             end
+
+            % Решение на основе порога
+            decision = score < obj.Threshold;
         end
 
     end % methods (public)
