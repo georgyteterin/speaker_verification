@@ -80,15 +80,21 @@ classdef voiceVerifier < handle
                     'rec_data должен быть cell-массивом минимум из 2 записей.');
             end
 
-            % --- Первая запись — референс ------------------------------
-            obj.RefFeatures = obj.extractSimpleMFCC(rec_data{1}, rec_fs);
+            % --- Случайная запись — референс ---------------------------
+            ref_idx = randi(numel(rec_data));
+            obj.RefFeatures = obj.extractSimpleMFCC(rec_data{ref_idx}, rec_fs);
 
             % --- Остальные записи — для вычисления порога --------------
             n_calib = numel(rec_data) - 1;
             obj.CalibScores = zeros(1, n_calib);
-            for k = 1:n_calib
-                calib_features = obj.extractSimpleMFCC(rec_data{k+1}, rec_fs);
-                obj.CalibScores(k) = obj.compareEuclidean(calib_features, obj.RefFeatures);
+            calib_idx = 1;
+            for k = 1:numel(rec_data)
+                if k == ref_idx
+                    continue
+                end
+                calib_features = obj.extractSimpleMFCC(rec_data{k}, rec_fs);
+                obj.CalibScores(calib_idx) = obj.compareEuclidean(calib_features, obj.RefFeatures);
+                calib_idx = calib_idx + 1;
             end
 
             % --- Вычисление порога -------------------------------------
@@ -97,8 +103,8 @@ classdef voiceVerifier < handle
 
             obj.isConfigured = true;
 
-            fprintf('[voiceVerifier] Configured: ref=rec{1}, calib=%d records, threshold=%.4f\n', ...
-                n_calib, obj.Threshold);
+            fprintf('[voiceVerifier] Configured: ref=rec{%d}, calib=%d records, threshold=%.4f\n', ...
+                ref_idx, n_calib, obj.Threshold);
         end
 
         % --------------------------------------------------------------- %
