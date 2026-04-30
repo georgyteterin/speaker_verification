@@ -33,6 +33,7 @@ classdef voiceVerifier < handle
     properties (SetAccess = private)
         Params          % Структура параметров MFCC
         RefFeatures     % MFCC эталонной записи  [num_frames × n_coeffs]
+        RefIdx          % Индекс записи, выбранной референсом
         Threshold       % Порог верификации, вычисленный по калибровочным записям
         CalibScores     % Scores по калибровочным записям (для анализа)
         isConfigured    % Флаг готовности
@@ -82,6 +83,7 @@ classdef voiceVerifier < handle
 
             % --- Случайная запись — референс ---------------------------
             ref_idx = randi(numel(rec_data));
+            obj.RefIdx = ref_idx;
             obj.RefFeatures = obj.extractSimpleMFCC(rec_data{ref_idx}, rec_fs);
 
             % --- Остальные записи — для вычисления порога --------------

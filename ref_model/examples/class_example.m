@@ -15,8 +15,7 @@ for k = 1:numel(rec_files)
     [rec_data{k}, rec_fs] = audioread(fullfile(rec_folder, rec_files(k).name));
 end
 
-fprintf('Загружено записей: %d  (референс: %s)\n\n', ...
-    numel(rec_files), strtrim(rec_files(1).name));
+fprintf('Загружено записей: %d  (референс будет выбран случайно)\n\n', numel(rec_files));
 
 % -----------------------------------------------------------------------
 % Создание и настройка верификатора
@@ -24,21 +23,26 @@ fprintf('Загружено записей: %d  (референс: %s)\n\n', ...
 vv = voiceVerifier();
 vv.Configure(rec_data, rec_fs);
 
+fprintf('Референс: %s\n', strtrim(rec_files(vv.RefIdx).name));
 fprintf('Порог верификации: %.4f\n', vv.Threshold);
 fprintf('CalibScores: min=%.4f  mean=%.4f  max=%.4f\n\n', ...
     min(vv.CalibScores), mean(vv.CalibScores), max(vv.CalibScores));
 
 % -----------------------------------------------------------------------
-% Верификация: свои записи
+% Верификация: свои записи (референс пропускается)
 % -----------------------------------------------------------------------
 fprintf('=== Свои (Authorized) ===\n');
 scores_own_euc = zeros(1, numel(rec_files) - 1);
 scores_own_dtw = zeros(1, numel(rec_files) - 1);
 
-for k = 2:numel(rec_files)
+own_idx = 1;
+for k = 1:numel(rec_files)
+    if k == vv.RefIdx
+        continue
+    end
     [test_data, test_fs] = audioread(fullfile(rec_folder, rec_files(k).name));
-    [scores_own_euc(k-1), decision] = vv.Process(test_data, test_fs, 'euclidean');
-    scores_own_dtw(k-1)             = vv.Process(test_data, test_fs, 'dtw');
+    [scores_own_euc(own_idx), decision] = vv.Process(test_data, test_fs, 'euclidean');
+    scores_own_dtw(own_idx)             = vv.Process(test_data, test_fs, 'dtw');
     filename = strtrim(rec_files(k).name);
     if decision
         verdict = 'ПРИНЯТ';
@@ -46,7 +50,8 @@ for k = 2:numel(rec_files)
         verdict = 'ОТКЛОНЁН';
     end
     fprintf('  %s  |  Euc: %.4f  |  DTW: %.4f  |  %s\n', ...
-        filename, scores_own_euc(k-1), scores_own_dtw(k-1), verdict);
+        filename, scores_own_euc(own_idx), scores_own_dtw(own_idx), verdict);
+    own_idx = own_idx + 1;
 end
 
 % -----------------------------------------------------------------------
