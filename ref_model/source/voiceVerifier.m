@@ -43,19 +43,19 @@ classdef voiceVerifier < handle
     % ------------------------------------------------------------------ %
     methods (Access = public)
 
-        function Configure(obj, ref_data, ref_fs, calib_data, calib_fs, params)
+        function Configure(obj, rec_data, rec_fs, params)
             % Configure  Инициализация верификатора.
             %
-            % Обязательные аргументы:
-            %   ref_data   — вектор отсчётов референсной записи
-            %   ref_fs     — частота дискретизации референсной записи (Гц)
-            %   calib_data — cell-массив {N×1} калибровочных записей владельца
-            %   calib_fs   — частота дискретизации калибровочных записей (Гц)
+            % Аргументы:
+            %   rec_data — cell-массив {N×1} записей владельца (N >= 2).
+            %              rec_data{1} — референс (точка отсчёта).
+            %              rec_data{2..N} — остальные записи для расчёта порога.
+            %   rec_fs   — частота дискретизации (одна на все записи, Гц)
             %
             % Необязательный аргумент:
-            %   params     — структура с полями (см. описание класса),
-            %                также может содержать поле threshold_k (по умолч. 2.0) —
-            %                коэффициент запаса при вычислении порога
+            %   params   — структура с полями (см. описание класса),
+            %              также может содержать поле threshold_k (по умолч. 2.0) —
+            %              коэффициент запаса при вычислении порога
 
             % --- Параметры по умолчанию --------------------------------
             default_params.frame_len_s  = 0.025; % Длина окна, с
@@ -68,25 +68,26 @@ classdef voiceVerifier < handle
                                                  % порога (mean + k*std)
 
             % --- Слияние с пользовательскими параметрами ---------------
-            if nargin < 6 || isempty(params)
+            if nargin < 4 || isempty(params)
                 obj.Params = default_params;
             else
                 obj.Params = obj.mergeParams(default_params, params);
             end
 
-            % --- Признаки референсной записи ---------------------------
-            obj.RefFeatures = obj.extractSimpleMFCC(ref_data, ref_fs);
-
-            % --- Калибровка: вычисление scores на своих записях --------
-            if ~iscell(calib_data)
+            % --- Проверка входных данных --------------------------------
+            if ~iscell(rec_data) || numel(rec_data) < 2
                 error('voiceVerifier:Configure', ...
-                    'calib_data должен быть cell-массивом векторов.');
+                    'rec_data должен быть cell-массивом минимум из 2 записей.');
             end
 
-            n_calib = numel(calib_data);
+            % --- Первая запись — референс ------------------------------
+            obj.RefFeatures = obj.extractSimpleMFCC(rec_data{1}, rec_fs);
+
+            % --- Остальные записи — для вычисления порога --------------
+            n_calib = numel(rec_data) - 1;
             obj.CalibScores = zeros(1, n_calib);
             for k = 1:n_calib
-                calib_features = obj.extractSimpleMFCC(calib_data{k}, calib_fs);
+                calib_features = obj.extractSimpleMFCC(rec_data{k+1}, rec_fs);
                 obj.CalibScores(k) = obj.compareEuclidean(calib_features, obj.RefFeatures);
             end
 
@@ -96,7 +97,7 @@ classdef voiceVerifier < handle
 
             obj.isConfigured = true;
 
-            fprintf('[voiceVerifier] Configured: %d calib records, threshold = %.4f\n', ...
+            fprintf('[voiceVerifier] Configured: ref=rec{1}, calib=%d records, threshold=%.4f\n', ...
                 n_calib, obj.Threshold);
         end
 

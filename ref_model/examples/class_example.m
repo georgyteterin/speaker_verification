@@ -4,60 +4,56 @@ clear, clc, close all
 addpath ../source
 
 % -----------------------------------------------------------------------
-% Референсная запись
+% Загрузка всех записей в один массив
+% Первая запись становится референсом, остальные для расчёта порога
 % -----------------------------------------------------------------------
-[ref_data, ref_fs] = audioread('../audio/testset1/ref.wav');
+rec_folder = '../audio/actual';
+rec_files  = dir(fullfile(rec_folder, '*.wav'));
 
-% -----------------------------------------------------------------------
-% Калибровочные записи (свои) 
-% -----------------------------------------------------------------------
-calib_folder = '../audio/testset1/actual';
-calib_files  = dir(fullfile(calib_folder, '*.wav'));
-
-calib_data = cell(numel(calib_files), 1);
-for k = 1:numel(calib_files)
-    [calib_data{k}, ~] = audioread(fullfile(calib_folder, calib_files(k).name));
+rec_data = cell(numel(rec_files), 1);
+for k = 1:numel(rec_files)
+    [rec_data{k}, rec_fs] = audioread(fullfile(rec_folder, rec_files(k).name));
 end
-calib_fs = ref_fs;
+
+fprintf('Загружено записей: %d  (референс: %s)\n\n', ...
+    numel(rec_files), strtrim(rec_files(1).name));
 
 % -----------------------------------------------------------------------
 % Создание и настройка верификатора
 % -----------------------------------------------------------------------
 vv = voiceVerifier();
-vv.Configure(ref_data, ref_fs, calib_data, calib_fs);
+vv.Configure(rec_data, rec_fs);
 
 fprintf('Порог верификации: %.4f\n', vv.Threshold);
-fprintf('Калибровочные scores: min=%.4f  mean=%.4f  max=%.4f\n\n', ...
+fprintf('CalibScores: min=%.4f  mean=%.4f  max=%.4f\n\n', ...
     min(vv.CalibScores), mean(vv.CalibScores), max(vv.CalibScores));
 
 % -----------------------------------------------------------------------
 % Верификация: свои записи
 % -----------------------------------------------------------------------
 fprintf('=== Свои (Authorized) ===\n');
-auth_folder = '../audio/testset1/actual';
-auth_files  = dir(fullfile(auth_folder, '*.wav'));
-scores_own_euc = zeros(1, numel(auth_files));
-scores_own_dtw = zeros(1, numel(auth_files));
+scores_own_euc = zeros(1, numel(rec_files) - 1);
+scores_own_dtw = zeros(1, numel(rec_files) - 1);
 
-for k = 1:numel(auth_files)
-    [test_data, test_fs] = audioread(fullfile(auth_folder, auth_files(k).name));
-    [scores_own_euc(k), decision] = vv.Process(test_data, test_fs, 'euclidean');
-    scores_own_dtw(k)             = vv.Process(test_data, test_fs, 'dtw');
-    filename = strtrim(auth_files(k).name);
+for k = 2:numel(rec_files)
+    [test_data, test_fs] = audioread(fullfile(rec_folder, rec_files(k).name));
+    [scores_own_euc(k-1), decision] = vv.Process(test_data, test_fs, 'euclidean');
+    scores_own_dtw(k-1)             = vv.Process(test_data, test_fs, 'dtw');
+    filename = strtrim(rec_files(k).name);
     if decision
         verdict = 'ПРИНЯТ';
     else
         verdict = 'ОТКЛОНЁН';
     end
     fprintf('  %s  |  Euc: %.4f  |  DTW: %.4f  |  %s\n', ...
-        filename, scores_own_euc(k), scores_own_dtw(k), verdict);
+        filename, scores_own_euc(k-1), scores_own_dtw(k-1), verdict);
 end
 
 % -----------------------------------------------------------------------
 % Верификация: чужие записи
 % -----------------------------------------------------------------------
 fprintf('\n=== Чужие (Impostors) ===\n');
-imp_folder = '../audio/testset1/imposters';
+imp_folder = '../audio/imposters';
 imp_files  = dir(fullfile(imp_folder, '*.wav'));
 scores_imp_euc = zeros(1, numel(imp_files));
 scores_imp_dtw = zeros(1, numel(imp_files));
