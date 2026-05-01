@@ -92,7 +92,7 @@ classdef voiceVerifier < handle
             % 1. Перекрестное сравнение (N*(N-1)/2 пар)
             for i = 1:num_ref_data
                 for j = i+1:num_ref_data
-                    score = obj.calcScore(obj.RefFeatures{i}, obj.RefFeatures{j}, obj.Params.Method);
+                    score = obj.calcScore(obj.RefFeatures{j_ref}, obj.RefFeatures{j_ref}, obj.Params.Method);
                     scores = [scores, score];
                 end
             end
@@ -104,16 +104,19 @@ classdef voiceVerifier < handle
             % Порог = Среднее + k * Отклонение
             % Если отклонение нулевое (сказано идентично), берем просто среднее с запасом
             if stdDist == 0
-                obj.Threshold = avgDist * obj.Params.threshold_k;
+                threshold = avgDist * k;
             else
-                obj.Threshold = avgDist + obj.Params.threshold_k * stdDist;
+                threshold = avgDist + k * stdDist;
             end
             
-            fprintf('Расчет завершен. Среднее расстояние: %.4f, Порог: %.4f\n', avgDist, obj.Threshold);
+            fprintf('Расчет завершен. Среднее расстояние: %.4f, Порог: %.4f\n', avgDist, threshold);
+
+            obj.Threshold = mean(obj.CalibScores) + obj.Params.threshold_k * std(obj.CalibScores);
 
             obj.isConfigured = true;
 
-            fprintf('Конфигурация закончена\n');
+            fprintf('[voiceVerifier] Configured: ref=rec{%d}, calib=%d records, threshold=%.4f\n', ...
+                ref_idx, n_calib, obj.Threshold);
         end
 
         % --------------------------------------------------------------- %
@@ -279,9 +282,9 @@ classdef voiceVerifier < handle
         function score = calcScore(obj, features_test, features_ref, method)
             switch lower(method)
                 case 'euclidean'
-                    score = obj.compareEuclidean(features_test, features_ref);
+                    score = compareEuclidean(features_test, features_ref);
                 case 'dtw'
-                    score = obj.compareDTW(features_test, features_ref);
+                    score = compareDTW(features_test, features_ref);
                 otherwise
                     error('voiceVerifier:Process', ...
                         'Неизвестный метод ''%s''. Используйте ''euclidean'' или ''dtw''.', method);

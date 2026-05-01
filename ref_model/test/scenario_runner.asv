@@ -1,4 +1,4 @@
-function out = scenario_runner(config)
+function out = scenario_runner(testname)
 
     addpath ..\source\
 
@@ -8,7 +8,7 @@ function out = scenario_runner(config)
     auth_files  = dir(fullfile(auth_folder, '*.wav'));
     imposter_folder = testset_folder + "\imposters\";
     
-    fprintf('Запуск сценария: %s\n', config.testset);
+    fprintf('Запуск сценария: %s\n', config.testname);
     
     [ref_data, ref_fs] = audioread(ref_path);
 
@@ -30,12 +30,12 @@ function out = scenario_runner(config)
         scores_imp(k) = vv.Process(test_data, test_fs, config.verifier.method);  
     end
 
-    out.testcase = config.testcase;
+    out.params.testname = config.testname;
     out.params.method = config.verifier.method;
     out.res.auth_scores = scores_auth;
     out.res.imposter_scores = scores_imp;
 
-    fprintf('Сценарий обработан: %s\n', config.testcase);
+    fprintf('Сценарий обработан: %s\n', config.testname);
     
 end
 

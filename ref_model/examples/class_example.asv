@@ -14,18 +14,16 @@ ref_folder = '../audio/ref';
 ref_files_full  = dir(fullfile(ref_folder, '*.wav'));
 ref_data_inds = randperm(numel(ref_files_full), num_ref_data);
 
-[ref_data, ref_fs] = deal(cell(num_ref_data, 1));
+ref_data = cell(num_ref_data, 1);
 for k = 1 : num_ref_data
-    [ref_data{k}, ref_fs{k}] = audioread(fullfile(ref_folder, ref_files_full(ref_data_inds(k)).name));
+    [ref_data{k}, ref_fs] = audioread(fullfile(ref_folder, ref_files_full(ref_data_inds(k)).name));
 end
 
-fprintf('Загружено записей: %d \n\n', num_ref_data);
+fprintf('Загружено записей: %d  (референс будет выбран случайно)\n\n', numel(ref_data));
 
 % -----------------------------------------------------------------------
 % Создание и настройка верификатора
 % -----------------------------------------------------------------------
-fprintf('Началась конфигурация \n\n');
-
 vv = voiceVerifier();
 vv.Configure(ref_data, ref_fs);
 
