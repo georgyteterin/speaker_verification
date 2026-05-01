@@ -4,7 +4,7 @@ clear, clc, close all
 addpath ../source
 
 % Кол-во реф записей для обработки, бует вынесено в настройки теста
-num_ref_data = 3;
+num_ref_data = 4;
 
 % -----------------------------------------------------------------------
 % Загрузка всех записей в один массив
@@ -15,76 +15,61 @@ ref_files_full  = dir(fullfile(ref_folder, '*.wav'));
 ref_data_inds = randperm(numel(ref_files_full), num_ref_data);
 
 [ref_data, ref_fs] = deal(cell(num_ref_data, 1));
-for k = 1 : num_ref_data
-    [ref_data{k}, ref_fs{k}] = audioread(fullfile(ref_folder, ref_files_full(ref_data_inds(k)).name));
+for j_test = 1 : num_ref_data
+    [ref_data{j_test}, ref_fs{j_test}] = audioread(fullfile(ref_folder, ref_files_full(ref_data_inds(j_test)).name));
 end
 
-fprintf('Загружено записей: %d \n\n', num_ref_data);
+% fprintf('Загружено записей: %d \n\n', num_ref_data);
 
 % -----------------------------------------------------------------------
 % Создание и настройка верификатора
 % -----------------------------------------------------------------------
-fprintf('Началась конфигурация \n\n');
+% fprintf('Началась конфигурация \n\n');
+
+params.Method = 'frames';
 
 vv = voiceVerifier();
-vv.Configure(ref_data, ref_fs);
-
-fprintf('Референс: %s\n', strtrim(ref_files(vv.RefIdx).name));
-fprintf('Порог верификации: %.4f\n', vv.Threshold);
-fprintf('CalibScores: min=%.4f  mean=%.4f  max=%.4f\n\n', ...
-    min(vv.CalibScores), mean(vv.CalibScores), max(vv.CalibScores));
+vv.Configure(ref_data, ref_fs, params);
 
 % -----------------------------------------------------------------------
-% Верификация: свои записи (референс пропускается)
+% Верификация: свои записи
 % -----------------------------------------------------------------------
-fprintf('=== Свои (Authorized) ===\n');
-scores_own_euc = zeros(1, numel(rec_files) - 1);
-scores_own_dtw = zeros(1, numel(rec_files) - 1);
+% fprintf('=== Свои (Authorized) ===\n');
+auth_folder = '../audio/auth';
+auth_files  = dir(fullfile(auth_folder, '*.wav'));
+scores_auth = zeros(numel(auth_files), num_ref_data);
 
-own_idx = 1;
-for k = 1:numel(rec_files)
-    if k == vv.RefIdx
-        continue
-    end
-    [test_data, test_fs] = audioread(fullfile(rec_folder, rec_files(k).name));
-    [scores_own_euc(own_idx), decision] = vv.Process(test_data, test_fs, 'euclidean');
-    scores_own_dtw(own_idx)             = vv.Process(test_data, test_fs, 'dtw');
-    filename = strtrim(rec_files(k).name);
+for j_test = 1:numel(auth_files)
+    [test_data, test_fs] = audioread(fullfile(auth_folder, auth_files(j_test).name));
+    [scores_auth(j_test, :), decision] = vv.Process(test_data, test_fs);
     if decision
         verdict = 'ПРИНЯТ';
     else
         verdict = 'ОТКЛОНЁН';
     end
-    fprintf('  %s  |  Euc: %.4f  |  DTW: %.4f  |  %s\n', ...
-        filename, scores_own_euc(own_idx), scores_own_dtw(own_idx), verdict);
-    own_idx = own_idx + 1;
 end
 
 % -----------------------------------------------------------------------
 % Верификация: чужие записи
 % -----------------------------------------------------------------------
-fprintf('\n=== Чужие (Impostors) ===\n');
+% fprintf('\n=== Чужие (Impostors) ===\n');
 imp_folder = '../audio/imposters';
 imp_files  = dir(fullfile(imp_folder, '*.wav'));
-scores_imp_euc = zeros(1, numel(imp_files));
-scores_imp_dtw = zeros(1, numel(imp_files));
+scores_imp = zeros(numel(imp_files), num_ref_data);
 
-for k = 1:numel(imp_files)
-    [test_data, test_fs] = audioread(fullfile(imp_folder, imp_files(k).name));
-    [scores_imp_euc(k), decision] = vv.Process(test_data, test_fs, 'euclidean');
-    scores_imp_dtw(k)             = vv.Process(test_data, test_fs, 'dtw');
-    filename = strtrim(imp_files(k).name);
+for j_test = 1:numel(imp_files)
+    [test_data, test_fs] = audioread(fullfile(imp_folder, imp_files(j_test).name));
+    [scores_imp(j_test, :), decision] = vv.Process(test_data, test_fs);
     if decision
         verdict = 'ПРИНЯТ';
     else
         verdict = 'ОТКЛОНЁН';
     end
-    fprintf('  %s  |  Euc: %.4f  |  DTW: %.4f  |  %s\n', ...
-        filename, scores_imp_euc(k), scores_imp_dtw(k), verdict);
 end
+fprintf("Кол-во строк, где порог превышается 2 раза ('свои'): %d\n", sum(sum(scores_auth > vv.Threshold, 2) > 2));
+fprintf("Кол-во строк, где порог превышается 2 раза ('чужие'): %d\n", sum(sum(scores_imp > vv.Threshold, 2) > 2));
 
 % -----------------------------------------------------------------------
 % Гистограммы
 % -----------------------------------------------------------------------
-plot_verification_results(scores_own_euc, scores_imp_euc, 'Euclidean', vv.Threshold);
-plot_verification_results(scores_own_dtw,  scores_imp_dtw,  'DTW');
+% plot_verification_results(scores_auth, scores_imp, vv.Params.Method, vv.Threshold);

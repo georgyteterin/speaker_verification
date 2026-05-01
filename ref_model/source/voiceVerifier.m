@@ -65,7 +65,7 @@ classdef voiceVerifier < handle
             default_params.n_filters    = 20;    % Количество Мел-фильтров
             default_params.n_coeffs     = 13;    % Количество MFCC-коэффициентов
             default_params.pre_emph     = 0.97;  % Коэффициент пре-акцента
-            default_params.threshold_k  = 2.0;   % Параметр из формуры 
+            default_params.threshold_k  = 0.3;   % Параметр из формуры 
                                                  % порога (mean + k*std)
             default_params.Method       = 'Euclidean';
 
@@ -101,13 +101,16 @@ classdef voiceVerifier < handle
             avgDist = mean(scores);
             stdDist = std(scores);
         
-            % Порог = Среднее + k * Отклонение
-            % Если отклонение нулевое (сказано идентично), берем просто среднее с запасом
-            if stdDist == 0
-                obj.Threshold = avgDist * obj.Params.threshold_k;
-            else
-                obj.Threshold = avgDist + obj.Params.threshold_k * stdDist;
-            end
+            % 3. Вычисление порога (используем k=3 для уверенности)
+
+            threshold = avgDist + obj.Params.threshold_k * stdDist;
+            
+            % --- ПРЕДОХРАНИТЕЛЬ (Safety Margin) ---
+            % Если референсы слишком идеальные (std почти 0), 
+            % порог станет 0.99 и не пустит тебя в другой обстановке.
+            % Установим минимально допустимый порог на уровне 80% от среднего.
+            minThreshold = avgDist * 0.80; 
+            obj.Threshold = max(threshold, minThreshold);
             
             fprintf('Расчет завершен. Среднее расстояние: %.4f, Порог: %.4f\n', avgDist, obj.Threshold);
 
@@ -118,7 +121,7 @@ classdef voiceVerifier < handle
 
         % --------------------------------------------------------------- %
 
-        function [score, decision] = Process(obj, test_data, test_fs, method)
+        function [scores, decision] = Process(obj, test_data, test_fs, method)
             % Process  Верификация тестовой записи.
             %
             % Возвращает:
@@ -140,8 +143,13 @@ classdef voiceVerifier < handle
             % Извлечение признаков тестовой записи
             test_features = obj.extractSimpleMFCC(test_data, test_fs);
 
-            % Вычисление расстояния
-            score = obj.calcScore(test_features, obj.RefFeatures, obj.Params.Method);
+            % Вычисление расстояний для каждой реф записью
+            num_ref_data = numel(obj.RefFeatures);
+            scores = [];
+            for j_ref = 1 : num_ref_data
+                score = obj.calcScore(test_features, obj.RefFeatures{j_ref}, obj.Params.Method);
+                scores = [scores score];
+            end
 
             % Решение на основе порога
             decision = score < obj.Threshold;
@@ -153,9 +161,40 @@ classdef voiceVerifier < handle
     %  Приватные методы
     % ------------------------------------------------------------------ %
     methods (Access = private)
+       
+        function clipped_signal = TrimSilence(~, signal, fs)
+            % Разделяем сигнал на короткие окна для анализа энергии
+            win_len = round(0.02 * fs); % Окно 20 мс
+            step = round(0.01 * fs);    % Шаг 10 мс
+            
+            % Считаем кратковременную энергию (RMS)
+            energy = [];
+            for i = 1:step:(length(signal)-win_len)
+                energy = [energy, sqrt(mean(signal(i:i+win_len).^2))];
+            end
+            
+            % Порог: 5-10% от максимальной энергии
+            threshold = max(energy) * 0.3; 
+            
+            % Находим индексы окон, где есть голос
+            voice_windows = find(energy > threshold);
+            
+            if isempty(voice_windows)
+                clipped_signal = signal; % Если голоса нет, возвращаем как есть
+            else
+                % Пересчитываем индексы окон обратно в индексы семплов
+                start_sample = (voice_windows(1) - 1) * step + 1;
+                end_sample = min(length(signal), (voice_windows(end) - 1) * step + win_len);
+                clipped_signal = signal(start_sample:end_sample);
+            end
+        end
+
 
         % --------------------------------------------------------------- %
         function mfcc_features = extractSimpleMFCC(obj, signal, fs)
+            
+            clipped_signal = obj.TrimSilence(signal, fs);
+            
             % Вычисление MFCC-признаков сигнала.
 
             p = obj.Params;
@@ -163,7 +202,7 @@ classdef voiceVerifier < handle
             hop_size  = round(p.hop_size_s  * fs);
 
             % 1. Пре-акцент: y[n] = x[n] - alpha * x[n-1]
-            emphasized_signal = filter([1, -p.pre_emph], 1, signal);
+            emphasized_signal = filter([1, -p.pre_emph], 1, clipped_signal);
 
             % 2. Разбиение на кадры
             num_frames   = floor((length(emphasized_signal) - frame_len) / hop_size) + 1;
@@ -192,6 +231,9 @@ classdef voiceVerifier < handle
                 mel_energies     = mel_bank * power_spec;
                 log_mel_energies = log(mel_energies + 1e-10);
                 mfcc_features(i, :) = obj.applySimpleDCT(log_mel_energies, p.n_coeffs);
+            end
+            if obj.Params.Method == "DTW"
+                mfcc_features = mfcc_features - mean(mfcc_features, 1);
             end
         end
 
@@ -275,6 +317,82 @@ classdef voiceVerifier < handle
         end
 
         % --------------------------------------------------------------- %
+        function score = compareCosine(~, features_test, features_ref)
+            % features_test, features_ref - матрицы [frames x coeffs]
+            
+            n_segments = 3;
+            n_coeffs = size(features_test, 2);
+            seg_scores = zeros(1, n_segments);
+            
+            frames_t = size(features_test, 1);
+            frames_r = size(features_ref, 1);
+            
+            step_t = floor(frames_t / n_segments);
+            step_r = floor(frames_r / n_segments);
+            
+            for s = 1:n_segments
+                idx_t = ((s-1)*step_t + 1) : (s*step_t);
+                idx_r = ((s-1)*step_r + 1) : (s*step_r);
+                
+                % 1. Средний спектр (Тембр)
+                v1_mean = mean(features_test(idx_t, 2:end), 1);
+                v2_mean = mean(features_ref(idx_r, 2:end), 1);
+                
+                % 2. Динамика спектра (Ритм/Вариативность)
+                v1_std = std(features_test(idx_t, 2:end), 0, 1);
+                v2_std = std(features_ref(idx_r, 2:end), 0, 1);
+                
+                % Косинус для средних
+                cos_mean = sum(v1_mean .* v2_mean) / (norm(v1_mean) * norm(v2_mean) + 1e-10);
+                
+                % Косинус для отклонений (сравнение "рисунка" изменения голоса)
+                cos_std = sum(v1_std .* v2_std) / (norm(v1_std) * norm(v2_std) + 1e-10);
+                
+                % Объединяем: тембр должен совпасть И динамика должна совпасть
+                % Веса 0.6 и 0.4 можно подкрутить
+                seg_scores(s) = 0.6 * cos_mean + 0.4 * cos_std;
+            end
+            
+            % Итоговый результат
+            score = mean(seg_scores);
+        end
+
+        % --------------------------------------------------------------- %
+
+        function score = compareFrameStep(~, features_test, features_ref)
+            % 1. Обрезка тишины (VAD) предполагается выполненной до вызова
+            
+            % 2. Приводим к одной длине (100 кадров)
+            target_len = 100;
+            f_test = resample(features_test, target_len, size(features_test, 1));
+            f_ref = resample(features_ref, target_len, size(features_ref, 1));
+            
+            n_coeffs = size(f_test, 2);
+            frame_scores = zeros(target_len, 1);
+            
+            % 4. Покадровое взвешенное сравнение
+            for i = 1:target_len
+                v1 = f_test(i, 2:end); 
+                v2 = f_ref(i, 2:end);
+                
+                dot_p = sum(v1 .* v2);
+                norm_p = sqrt(sum(v1.^2)) * sqrt(sum(v2.^2));
+                
+                if norm_p > 1e-10
+                    frame_scores(i) = dot_p / norm_p;
+                else
+                    frame_scores(i) = 0;
+                end
+            end
+            
+            % Итоговый результат с нелинейным усилением
+            score = mean(frame_scores);
+            score = score^20;
+        end
+
+
+
+        % --------------------------------------------------------------- %
 
         function score = calcScore(obj, features_test, features_ref, method)
             switch lower(method)
@@ -282,6 +400,10 @@ classdef voiceVerifier < handle
                     score = obj.compareEuclidean(features_test, features_ref);
                 case 'dtw'
                     score = obj.compareDTW(features_test, features_ref);
+                case 'cos'
+                    score = obj.compareCosine(features_test, features_ref);
+                case 'frames'
+                    score = obj.compareFrameStep(features_test, features_ref);
                 otherwise
                     error('voiceVerifier:Process', ...
                         'Неизвестный метод ''%s''. Используйте ''euclidean'' или ''dtw''.', method);

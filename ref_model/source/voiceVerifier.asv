@@ -92,7 +92,7 @@ classdef voiceVerifier < handle
             % 1. Перекрестное сравнение (N*(N-1)/2 пар)
             for i = 1:num_ref_data
                 for j = i+1:num_ref_data
-                    score = obj.calcScore(obj.RefFeatures{j_ref}, obj.RefFeatures{j_ref}, obj.Params.Method);
+                    score = obj.calcScore(obj.RefFeatures{i}, obj.RefFeatures{j}, obj.Params.Method);
                     scores = [scores, score];
                 end
             end
@@ -104,19 +104,16 @@ classdef voiceVerifier < handle
             % Порог = Среднее + k * Отклонение
             % Если отклонение нулевое (сказано идентично), берем просто среднее с запасом
             if stdDist == 0
-                threshold = avgDist * k;
+                obj.Threshold = avgDist * obj.Params.threshold_k;
             else
-                threshold = avgDist + k * stdDist;
+                obj.Threshold = avgDist + obj.Params.threshold_k * stdDist;
             end
             
-            fprintf('Расчет завершен. Среднее расстояние: %.4f, Порог: %.4f\n', avgDist, threshold);
-
-            obj.Threshold = mean(obj.CalibScores) + obj.Params.threshold_k * std(obj.CalibScores);
+            fprintf('Расчет завершен. Среднее расстояние: %.4f, Порог: %.4f\n', avgDist, obj.Threshold);
 
             obj.isConfigured = true;
 
-            fprintf('[voiceVerifier] Configured: ref=rec{%d}, calib=%d records, threshold=%.4f\n', ...
-                ref_idx, n_calib, obj.Threshold);
+            fprintf('Конфигурация закончена\n');
         end
 
         % --------------------------------------------------------------- %
@@ -143,8 +140,13 @@ classdef voiceVerifier < handle
             % Извлечение признаков тестовой записи
             test_features = obj.extractSimpleMFCC(test_data, test_fs);
 
-            % Вычисление расстояния
-            score = obj.calcScore(test_features, obj.RefFeatures, obj.Params.Method);
+            % Вычисление расстояний для каждой реф записью
+            num_ref_data = numel(obj.RefFeatures);
+            scores = 
+            for j_ref = 1 : num_ref_data
+                score = obj.calcScore(test_features, obj.RefFeatures{j_ref}, obj.Params.Method);
+                scores = [scores score];
+            end
 
             % Решение на основе порога
             decision = score < obj.Threshold;
@@ -282,9 +284,9 @@ classdef voiceVerifier < handle
         function score = calcScore(obj, features_test, features_ref, method)
             switch lower(method)
                 case 'euclidean'
-                    score = compareEuclidean(features_test, features_ref);
+                    score = obj.compareEuclidean(features_test, features_ref);
                 case 'dtw'
-                    score = compareDTW(features_test, features_ref);
+                    score = obj.compareDTW(features_test, features_ref);
                 otherwise
                     error('voiceVerifier:Process', ...
                         'Неизвестный метод ''%s''. Используйте ''euclidean'' или ''dtw''.', method);
