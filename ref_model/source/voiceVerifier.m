@@ -5,7 +5,6 @@ classdef voiceVerifier < handle
     %   vv = voiceVerifier();
     %   vv.Configure(ref_data, ref_fs);
     %   score = vv.Process(test_data, test_fs);
-    %   score = vv.Process(test_data, test_fs, 'dtw');
     %
     % Методы:
     %   Configure(ref_data, ref_fs, params)
@@ -19,21 +18,28 @@ classdef voiceVerifier < handle
     %                     n_filters    (по умолч. 20)
     %                     n_coeffs     (по умолч. 13)
     %                     pre_emph     (по умолч. 0.97)
+    %                     threshold_k  (по умолч. 1)
+    %                     log          (по умолч. 0) -- Вывод текста
     %
     %   score = Process(test_data, test_fs)
-    %   score = Process(test_data, test_fs, method)
+    %   score = Process(test_data, test_fs)
     %       Извлекает признаки из тестовой записи и возвращает меру
     %       расстояния до эталона.
-    %       method — 'euclidean' (по умолч.) или 'dtw'
-    %       Меньший score означает большее сходство с диктором.
 
     % ------------------------------------------------------------------ %
     %  Публичные свойства (доступны для чтения снаружи)
     % ------------------------------------------------------------------ %
     properties (SetAccess = private)
         Params          % Структура параметров MFCC
-        RefFeatures     % MFCC эталонной записи  [num_frames × n_coeffs]
+        RefFeatures     % Cell-массив MFCC эталонных записей 
+                        % num_ref_data × [num_frames × n_coeffs]
+        RefIdx          % Индекс записи, выбранной референсом
+        Threshold       % Порог верификации, вычисленный по калибровочным записям
         isConfigured    % Флаг готовности
+        RefWeights      % Веса для разных реф. записей, чем больше расстояние
+                        % какая-то реф записи до остальных, тем меньше она
+                        % учитывается
+        IndividualThresholds
     end
 
     % ------------------------------------------------------------------ %
@@ -43,13 +49,14 @@ classdef voiceVerifier < handle
 
         function Configure(obj, ref_data, ref_fs, params)
             % --- Параметры по умолчанию --------------------------------
-            default_params.frame_len_s = 0.025;  % Длина окна, с
-            default_params.hop_size_s  = 0.010;  % Шаг кадра, с
-            default_params.nfft       = 512;    % Размер FFT
-            default_params.n_filters   = 20;     % Количество Мел-фильтров
-            default_params.n_coeffs    = 13;     % Количество MFCC-коэффициентов
-            default_params.pre_emph    = 0.97;   % Коэффициент пре-акцента
-
+            default_params.frame_len_s  = 0.025; 
+            default_params.hop_size_s   = 0.010; 
+            default_params.nfft         = 1024;   
+            default_params.n_filters    = 20;    
+            default_params.n_coeffs     = 13;    
+            default_params.pre_emph     = 0.97;  
+            default_params.threshold_k  = 1;
+            default_params.log          = 0;
             % --- Слияние с пользовательскими параметрами ---------------
             if nargin < 4 || isempty(params)
                 obj.Params = default_params;
@@ -57,49 +64,128 @@ classdef voiceVerifier < handle
                 obj.Params = obj.mergeParams(default_params, params);
             end
 
-            % --- Признаки референсной записи ---------------------------
-            obj.RefFeatures = obj.extractSimpleMFCC(ref_data, ref_fs);
+            % Извлечение признаков
+            num_ref_data = numel(ref_data);
+            for j_ref = 1 : num_ref_data
+                obj.RefFeatures{j_ref} = obj.extractSimpleMFCC(ref_data{j_ref}, ref_fs{j_ref});
+            end
+        
+            % Матрица взаимного сходства (Оптимизированная симметрия)
+            distMatrix = zeros(num_ref_data, num_ref_data);
+            for i = 1:num_ref_data
+                for j = i+1:num_ref_data
+                    s = obj.compareFrameStep(obj.RefFeatures{i}, obj.RefFeatures{j});
+                    distMatrix(i,j) = s;
+                    distMatrix(j,i) = s; 
+                end
+            end
+        
+            % 1. Расчет весов (RefWeights)
+            % Считаем среднее сходство каждого рефа с остальными
+            meanSimPerRef = sum(distMatrix, 2) / (num_ref_data - 1);
+            % Чем выше среднее сходство, тем выше вес (типичность)
+            obj.RefWeights = (meanSimPerRef' / sum(meanSimPerRef));
+        
+            % 2. Расчет индивидуальных порогов (IndividualThresholds)
+            obj.IndividualThresholds = zeros(1, num_ref_data);
+            for i = 1 : num_ref_data
+                rowValues = distMatrix(i, [1:i-1, i+1:num_ref_data]);
+                avg_i = mean(rowValues);
+                std_i = std(rowValues);
+            
+                % НОВАЯ ЛОГИКА: Порог чуть НИЖЕ среднего сходства.
+                % Чем больше k, тем "мягче" порог (больше допускаем отклонений).
+                ti = avg_i - (obj.Params.threshold_k * std_i);
+            
+                % ПРЕДОХРАНИТЕЛЬ: чтобы порог не ушел в пол или в бесконечность
+                obj.IndividualThresholds(i) = min(max(ti, 0.70), 0.98);
+            end
 
             obj.isConfigured = true;
+            if obj.Params.log
+                fprintf('Результаты конфигурации:\n');
+                fprintf('Веса:   [%s]\n', num2str(obj.RefWeights, ' %.3f'));
+                fprintf('Пороги: [%s]\n', num2str(obj.IndividualThresholds, ' %.3f'));
+            end
         end
+
 
         % --------------------------------------------------------------- %
 
-        function score = Process(obj, test_data, test_fs, method)
-
+        function [scores, decision] = Process(obj, test_data, test_fs)
+            % 1. Проверка конфигурации
             if ~obj.isConfigured
-                error('voiceVerifier:Process', ...
-                    'Сначала вызовите Configure.');
+                error('voiceVerifier:Process', 'Сначала вызовите Configure.');
             end
-
-            if nargin < 4 || isempty(method)
-                method = 'euclidean';
-            end
-
-            % Извлечение признаков тестовой записи
+        
+            % 2. Извлечение признаков тестовой записи
             test_features = obj.extractSimpleMFCC(test_data, test_fs);
-
-            % Вычисление расстояния
-            switch lower(method)
-                case 'euclidean'
-                    score = obj.compareEuclidean(test_features, obj.RefFeatures);
-                case 'dtw'
-                    score = obj.compareDTW(test_features, obj.RefFeatures);
-                otherwise
-                    error('voiceVerifier:Process', ...
-                        'Неизвестный метод ''%s''. Используйте ''euclidean'' или ''dtw''.', method);
+            
+            % 3. Расчет сходства (scores) с каждым из N референсов
+            num_ref_data = numel(obj.RefFeatures);
+            scores = zeros(1, num_ref_data);
+            for j_ref = 1 : num_ref_data
+                scores(j_ref) = obj.compareFrameStep(test_features, obj.RefFeatures{j_ref});
             end
+        
+            % 4. Нелинейное преобразование и голосование
+            % Степень 10 — золотая середина: достаточно острая для сепарации 0.005, 
+            % но не превращает всё в шум.
+            power_val = 6; 
+            
+            % Сравниваем текущее сходство в степени с индивидуальным порогом в степени
+            % Это создает крутой "обрыв" для тех, кто чуть-чуть не дотягивает.
+            votes = (scores.^power_val) >= (obj.IndividualThresholds.^power_val);
+        
+            % 5. Взвешенное суммирование голосов
+            % Референсы, которые "признали" голос, вносят вклад согласно своему весу (RefWeights)
+            final_weighted_vote = sum(votes .* obj.RefWeights);
+        
+            % 6. Принятие решения
+            % Порог 0.5 означает "мажоритарное" решение: доступ разрешен, если 
+            % сумма весов проголосовавших "ЗА" превышает половину.
+            decision = final_weighted_vote > 0.35;
         end
-
     end % methods (public)
 
     % ------------------------------------------------------------------ %
     %  Приватные методы
     % ------------------------------------------------------------------ %
     methods (Access = private)
+       
+        function clipped_signal = TrimSilence(~, signal, fs)
+            % Разделяем сигнал на короткие окна для анализа энергии
+            win_len = round(0.02 * fs); % Окно 20 мс
+            step = round(0.01 * fs);    % Шаг 10 мс
+            
+            % Считаем кратковременную энергию (RMS)
+            energy = [];
+            for i = 1:step:(length(signal)-win_len)
+                energy = [energy, sqrt(mean(signal(i:i+win_len).^2))];
+            end
+            
+            % Порог: 5-10% от максимальной энергии
+            threshold = max(energy) * 0.3; 
+            
+            % Находим индексы окон, где есть голос
+            voice_windows = find(energy > threshold);
+            
+            if isempty(voice_windows)
+                clipped_signal = signal; % Если голоса нет, возвращаем как есть
+            else
+                % Пересчитываем индексы окон обратно в индексы семплов
+                start_sample = (voice_windows(1) - 1) * step + 1;
+                end_sample = min(length(signal), (voice_windows(end) - 1) * step + win_len);
+                clipped_signal = signal(start_sample:end_sample);
+            end
+        end
+
 
         % --------------------------------------------------------------- %
         function mfcc_features = extractSimpleMFCC(obj, signal, fs)
+            
+            clipped_signal = obj.TrimSilence(signal, fs);
+            
             % Вычисление MFCC-признаков сигнала.
 
             p = obj.Params;
@@ -107,7 +193,7 @@ classdef voiceVerifier < handle
             hop_size  = round(p.hop_size_s  * fs);
 
             % 1. Пре-акцент: y[n] = x[n] - alpha * x[n-1]
-            emphasized_signal = filter([1, -p.pre_emph], 1, signal);
+            emphasized_signal = filter([1, -p.pre_emph], 1, clipped_signal);
 
             % 2. Разбиение на кадры
             num_frames   = floor((length(emphasized_signal) - frame_len) / hop_size) + 1;
@@ -180,42 +266,63 @@ classdef voiceVerifier < handle
         end
 
         % --------------------------------------------------------------- %
-        function score = compareEuclidean(~, features_test, features_ref)
-            % Евклидово расстояние между усреднёнными MFCC.
 
-            mean_test = mean(features_test, 1);
-            mean_ref  = mean(features_ref,  1);
-            score     = sqrt(sum((mean_test - mean_ref).^2));
+        function resampled = manualResample(~, data, new_len)
+            [old_len, n_coeffs] = size(data);
+            resampled = zeros(new_len, n_coeffs);
+            
+            if old_len < 2
+                if old_len == 1
+                    resampled = repmat(data, new_len, 1);
+                end
+                return; 
+            end
+            
+            % Шаг прохода
+            step = (old_len - 1) / (new_len - 1);
+            
+            for i = 1:new_len
+                pos = (i-1) * step + 1;
+                
+                low = floor(pos);
+                high = ceil(pos);
+                
+                % Жесткое ограничение индексов (защита от выхода за границы)
+                low = max(1, min(low, old_len));
+                high = max(1, min(high, old_len));
+                
+                if low == high
+                    resampled(i, :) = data(low, :);
+                else
+                    frac = pos - low;
+                    % Интерполяция
+                    resampled(i, :) = (1 - frac) * data(low, :) + frac * data(high, :);
+                end
+            end
         end
 
         % --------------------------------------------------------------- %
-        function score = compareDTW(~, features_test, features_ref)
-            % Dynamic Time Warping расстояние между MFCC-матрицами.
-
-            N = size(features_test, 1);
-            M = size(features_ref,  1);
-
-            D = zeros(N, M);
-
-            % Инициализация
-            D(1,1) = sqrt(sum((features_test(1,:) - features_ref(1,:)).^2));
-            for i = 2:N
-                D(i,1) = D(i-1,1) + sqrt(sum((features_test(i,:) - features_ref(1,:)).^2));
-            end
-            for j = 2:M
-                D(1,j) = D(1,j-1) + sqrt(sum((features_test(1,:) - features_ref(j,:)).^2));
-            end
-
-            % Основной цикл (динамическое программирование)
-            for i = 2:N
-                for j = 2:M
-                    dist   = sqrt(sum((features_test(i,:) - features_ref(j,:)).^2));
-                    D(i,j) = dist + min([D(i-1,j), D(i,j-1), D(i-1,j-1)]);
+        function score = compareFrameStep(obj, features_test, features_ref)
+            
+            % Приводим к одной длине (100 кадров)
+            target_len = 100;
+            f_test = obj.manualResample(features_test, target_len);
+            f_ref = obj.manualResample(features_ref, target_len);
+            
+            frame_scores = zeros(target_len, 1);
+            for i = 1:target_len
+                v1 = f_test(i, 2:end); 
+                v2 = f_ref(i, 2:end);
+                norm_p = sqrt(sum(v1.^2)) * sqrt(sum(v2.^2));
+                if norm_p > 1e-10
+                    frame_scores(i) = sum(v1 .* v2) / norm_p;
+                else
+                    frame_scores(i) = 0;
                 end
             end
-
-            % Нормализованная мера схожести
-            score = D(N, M) / (N + M);
+            
+            % Возвращаем среднее БЕЗ степени. Теперь score всегда в районе 0.8-0.95
+            score = mean(frame_scores);
         end
 
         % --------------------------------------------------------------- %

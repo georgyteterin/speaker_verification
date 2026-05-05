@@ -8,7 +8,7 @@ function out = scenario_runner(config)
     auth_files  = dir(fullfile(auth_folder, '*.wav'));
     imposter_folder = testset_folder + "\imposters\";
     
-    fprintf('Запуск сценария: %s\n', config.testcase);
+    fprintf('Запуск сценария: %s\n', config.testset);
     
     [ref_data, ref_fs] = audioread(ref_path);
 

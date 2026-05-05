@@ -1,54 +1,68 @@
-% example_usage.m — пример использования класса VoiceVerifier
+% class_example.m — пример использования класса voiceVerifier
 clear, clc, close all
 
 addpath ../source
 
-[ref_data, ref_fs] = audioread('../audio/ref.wav');
+% Кол-во реф записей для обработки, бует вынесено в настройки теста
+num_ref_data = 3;
 
+% -----------------------------------------------------------------------
+% Загрузка всех записей в один массив
+% Первая запись становится референсом, остальные для расчёта порога
+% -----------------------------------------------------------------------
+ref_folder = '../audio/ref';
+ref_files_full  = dir(fullfile(ref_folder, '*.wav'));
+ref_data_inds = randperm(numel(ref_files_full), num_ref_data);
+
+[ref_data, ref_fs] = deal(cell(num_ref_data, 1));
+for j_test = 1 : num_ref_data
+    [ref_data{j_test}, ref_fs{j_test}] = audioread(fullfile(ref_folder, ref_files_full(ref_data_inds(j_test)).name));
+end
+
+% fprintf('Загружено записей: %d \n\n', num_ref_data);
+
+% -----------------------------------------------------------------------
+% Создание и настройка верификатора
+% -----------------------------------------------------------------------
+
+fprintf("\n[%s] Запуск нового тест\n", datetime)
 vv = voiceVerifier();
-
-% Параметры по умолчанию (можно не передавать)
-custom_params.n_coeffs  = 13;
-custom_params.n_filters = 20;
-
-vv.Configure(ref_data, ref_fs, custom_params);
+vv.Configure(ref_data, ref_fs);
 
 % -----------------------------------------------------------------------
 % Верификация: свои записи
 % -----------------------------------------------------------------------
-fprintf('\n=== Свои (Authorized) ===\n');
-auth_folder = '../audio/actual';
+auth_folder = '../audio/auth';
 auth_files  = dir(fullfile(auth_folder, '*.wav'));
-scores_own_euc = zeros(1, numel(auth_files));  
-scores_own_dtw = zeros(1, numel(auth_files)); 
+scores_auth = zeros(numel(auth_files), num_ref_data);
+decision_auth = zeros(1, numel(auth_files));
 
-for k = 1:numel(auth_files)
-    [test_data, test_fs] = audioread(fullfile(auth_folder, auth_files(k).name));
-    scores_own_euc(k) = vv.Process(test_data, test_fs, 'euclidean');  
-    scores_own_dtw(k) = vv.Process(test_data, test_fs, 'dtw');
-    fprintf('  %s  |  Euclidean: %.4f  |  DTW: %.4f\n', ...
-        auth_files(k).name, scores_own_euc(k), scores_own_dtw(k));
+for j_test = 1:numel(auth_files)
+    [test_data, test_fs] = audioread(fullfile(auth_folder, auth_files(j_test).name));
+    [scores_auth(j_test, :), decision_auth(1, j_test)] = vv.Process(test_data, test_fs);
 end
 
 % -----------------------------------------------------------------------
 % Верификация: чужие записи
 % -----------------------------------------------------------------------
-fprintf('\n=== Чужие (Impostors) ===\n');
-imposter_folder = '../audio/imposters';
-imposter_files  = dir(fullfile(imposter_folder, '*.wav'));
-scores_imp_euc = zeros(1, numel(imposter_files));   % <-- добавить
-scores_imp_dtw = zeros(1, numel(imposter_files)); 
+imp_folder = '../audio/imposters';
+imp_files  = dir(fullfile(imp_folder, '*.wav'));
+scores_imp = zeros(numel(imp_files), num_ref_data);
+decision_imp = zeros(1, numel(imp_files));
 
-for k = 1:numel(imposter_files)
-    [test_data, test_fs] = audioread(fullfile(imposter_folder, imposter_files(k).name));
-    scores_imp_euc(k) = vv.Process(test_data, test_fs, 'euclidean');  
-    scores_imp_dtw(k) = vv.Process(test_data, test_fs, 'dtw'); 
-    fprintf('  %s  |  Euclidean: %.4f  |  DTW: %.4f\n', ...
-        imposter_files(k).name, scores_imp_euc(k), scores_imp_dtw(k));
+for j_test = 1:numel(imp_files)
+    [test_data, test_fs] = audioread(fullfile(imp_folder, imp_files(j_test).name));
+    [scores_imp(j_test, :), decision_imp(1, j_test)] = vv.Process(test_data, test_fs);
 end
 
-% -----------------------------------------------------------------------
-% 6. Отрисовка гистограммм
-% -----------------------------------------------------------------------
-plot_verification_results(scores_own_euc, scores_imp_euc, 'Euclidean');
-plot_verification_results(scores_own_dtw,  scores_imp_dtw,  'DTW');
+fprintf("\n[%s] Анализ результатов\n", datetime);
+
+FRR = (sum(decision_auth == 0) / numel(decision_auth)) * 100;
+FAR = (sum(decision_imp == 1) / numel(decision_imp)) * 100;
+
+% Общая точность (Accuracy)
+Accuracy = (sum(decision_auth == 1) + sum(decision_imp == 0)) /  (numel(decision_auth) + numel(decision_imp)) * 100;
+
+fprintf('FRR (Ложный отказ): %.2f%%\n', FRR);
+fprintf('FAR (Ложный доступ): %.2f%%\n', FAR);
+fprintf('Общая точность: %.2f%%\n\n', Accuracy);
